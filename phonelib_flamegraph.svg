@@ -1,0 +1,718 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="728" height="374" onload="init(evt)" viewBox="0 0 728 374" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="728.0" height="374.0" fill="url(#background)"  />
+<text text-anchor="middle" x="364.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="357" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="618.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="618.00" y="357" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Integer#times (1) (1,022 ms, 100.03%)</title><rect x="10.0" y="261" width="708.0" height="15.0" fill="rgb(205,192,36)" rx="2" ry="2" />
+<text text-anchor="" x="13.01" y="271.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Integer#times (1)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#split (500) (0 ms, 0.00%)</title><rect x="16.1" y="181" width="0.3" height="15.0" fill="rgb(243,86,7)" rx="2" ry="2" />
+<text text-anchor="" x="19.08" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#get_patterns (5000) (12 ms, 1.17%)</title><rect x="214.4" y="85" width="8.3" height="15.0" fill="rgb(247,81,19)" rx="2" ry="2" />
+<text text-anchor="" x="217.43" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (4000) (3 ms, 0.29%)</title><rect x="703.2" y="133" width="2.1" height="15.0" fill="rgb(224,96,0)" rx="2" ry="2" />
+<text text-anchor="" x="706.21" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#detect_and_parse (500) (993 ms, 97.19%)</title><rect x="17.3" y="181" width="688.2" height="15.0" fill="rgb(245,175,42)" rx="2" ry="2" />
+<text text-anchor="" x="20.33" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::PhoneAnalyzer#detect_and_parse (500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>NilClass#to_s (2500) (1 ms, 0.10%)</title><rect x="229.3" y="53" width="0.3" height="15.0" fill="rgb(223,117,46)" rx="2" ry="2" />
+<text text-anchor="" x="232.26" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#original_s (500) (1 ms, 0.10%)</title><rect x="706.5" y="149" width="0.4" height="15.0" fill="rgb(216,155,48)" rx="2" ry="2" />
+<text text-anchor="" x="709.53" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#fixed_and_mobile_keys (500) (1 ms, 0.10%)</title><rect x="239.5" y="85" width="0.6" height="15.0" fill="rgb(250,136,7)" rx="2" ry="2" />
+<text text-anchor="" x="242.47" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#gsub! (500) (1 ms, 0.10%)</title><rect x="714.5" y="197" width="0.3" height="15.0" fill="rgb(224,174,28)" rx="2" ry="2" />
+<text text-anchor="" x="717.45" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Regexp#match (246000) (109 ms, 10.67%)</title><rect x="599.6" y="101" width="75.4" height="15.0" fill="rgb(213,8,13)" rx="2" ry="2" />
+<text text-anchor="" x="602.62" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Regexp#m..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#passed_country (500) (11 ms, 1.08%)</title><rect x="707.0" y="197" width="7.5" height="15.0" fill="rgb(205,197,7)" rx="2" ry="2" />
+<text text-anchor="" x="710.00" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#full_regex_for_data (500) (4 ms, 0.39%)</title><rect x="554.7" y="117" width="2.7" height="15.0" fill="rgb(254,107,9)" rx="2" ry="2" />
+<text text-anchor="" x="557.68" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#parse_special (5000) (1 ms, 0.10%)</title><rect x="221.7" y="53" width="1.0" height="15.0" fill="rgb(236,64,9)" rx="2" ry="2" />
+<text text-anchor="" x="224.66" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Hash#== (500) (0 ms, 0.00%)</title><rect x="239.8" y="69" width="0.3" height="15.0" fill="rgb(237,69,16)" rx="2" ry="2" />
+<text text-anchor="" x="242.79" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#[] (500) (0 ms, 0.00%)</title><rect x="714.3" y="181" width="0.2" height="15.0" fill="rgb(226,204,35)" rx="2" ry="2" />
+<text text-anchor="" x="717.31" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Kernel#require (3) (3 ms, 0.29%)</title><rect x="715.6" y="213" width="2.4" height="15.0" fill="rgb(224,25,41)" rx="2" ry="2" />
+<text text-anchor="" x="718.60" y="223.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (1000) (1 ms, 0.10%)</title><rect x="241.3" y="69" width="0.6" height="15.0" fill="rgb(216,77,42)" rx="2" ry="2" />
+<text text-anchor="" x="244.32" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#national_and_data (500) (51 ms, 4.99%)</title><rect x="207.6" y="133" width="35.3" height="15.0" fill="rgb(253,164,25)" rx="2" ry="2" />
+<text text-anchor="" x="210.56" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ph..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#default_country (500) (0 ms, 0.00%)</title><rect x="706.2" y="165" width="0.1" height="15.0" fill="rgb(245,187,18)" rx="2" ry="2" />
+<text text-anchor="" x="709.18" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>MatchData#to_s (1000) (0 ms, 0.00%)</title><rect x="229.0" y="53" width="0.3" height="15.0" fill="rgb(250,53,7)" rx="2" ry="2" />
+<text text-anchor="" x="232.05" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_regexp_cache (4000) (1 ms, 0.10%)</title><rect x="704.6" y="117" width="0.7" height="15.0" fill="rgb(206,57,36)" rx="2" ry="2" />
+<text text-anchor="" x="707.56" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Class#new (500) (1,016 ms, 99.44%)</title><rect x="10.6" y="229" width="704.3" height="15.0" fill="rgb(225,194,38)" rx="2" ry="2" />
+<text text-anchor="" x="13.57" y="239.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Class#new (500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#vanity_converted (500) (0 ms, 0.00%)</title><rect x="13.6" y="181" width="0.4" height="15.0" fill="rgb(253,13,45)" rx="2" ry="2" />
+<text text-anchor="" x="16.65" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#join (500) (0 ms, 0.00%)</title><rect x="15.3" y="181" width="0.2" height="15.0" fill="rgb(250,179,17)" rx="2" ry="2" />
+<text text-anchor="" x="18.30" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#parse (500) (1,021 ms, 99.93%)</title><rect x="10.3" y="245" width="707.7" height="15.0" fill="rgb(209,80,18)" rx="2" ry="2" />
+<text text-anchor="" x="13.32" y="255.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::Core#parse (500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#number_valid_and_possible? (5000) (20 ms, 1.96%)</title><rect x="222.7" y="85" width="14.1" height="15.0" fill="rgb(205,114,18)" rx="2" ry="2" />
+<text text-anchor="" x="225.69" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Class#new (207) (1 ms, 0.10%)</title><rect x="509.1" y="101" width="0.8" height="15.0" fill="rgb(244,162,40)" rx="2" ry="2" />
+<text text-anchor="" x="512.15" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#- (1000) (0 ms, 0.00%)</title><rect x="237.5" y="69" width="0.2" height="15.0" fill="rgb(223,225,14)" rx="2" ry="2" />
+<text text-anchor="" x="240.46" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Kernel#require (1) (4 ms, 0.39%)</title><rect x="714.9" y="229" width="3.1" height="15.0" fill="rgb(223,13,44)" rx="2" ry="2" />
+<text text-anchor="" x="717.90" y="239.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_data (500) (9 ms, 0.88%)</title><rect x="707.8" y="165" width="6.4" height="15.0" fill="rgb(232,228,44)" rx="2" ry="2" />
+<text text-anchor="" x="710.84" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#match (246000) (170 ms, 16.64%)</title><rect x="557.4" y="117" width="117.6" height="15.0" fill="rgb(247,144,30)" rx="2" ry="2" />
+<text text-anchor="" x="560.42" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >String#match (..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#join (500) (0 ms, 0.00%)</title><rect x="556.1" y="101" width="0.2" height="15.0" fill="rgb(235,224,19)" rx="2" ry="2" />
+<text text-anchor="" x="559.09" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_data (500) (0 ms, 0.00%)</title><rect x="705.7" y="165" width="0.2" height="15.0" fill="rgb(241,19,25)" rx="2" ry="2" />
+<text text-anchor="" x="708.73" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Thread:70133427171040 (1,022 ms, 100.03%)</title><rect x="10.0" y="309" width="708.0" height="15.0" fill="rgb(242,34,25)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="319.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Thread:70133427171040</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#phone_match_data? (245500) (624 ms, 61.07%)</title><rect x="242.9" y="133" width="432.1" height="15.0" fill="rgb(240,226,10)" rx="2" ry="2" />
+<text text-anchor="" x="245.88" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::PhoneAnalyzerHelper#phone_match_data? (245500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#match (5500) (6 ms, 0.59%)</title><rect x="232.8" y="53" width="4.0" height="15.0" fill="rgb(205,79,40)" rx="2" ry="2" />
+<text text-anchor="" x="235.79" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (500) (0 ms, 0.00%)</title><rect x="556.3" y="101" width="0.4" height="15.0" fill="rgb(215,72,29)" rx="2" ry="2" />
+<text text-anchor="" x="559.34" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (5500) (5 ms, 0.49%)</title><rect x="229.6" y="53" width="3.2" height="15.0" fill="rgb(220,111,43)" rx="2" ry="2" />
+<text text-anchor="" x="232.64" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#parse_special (500) (0 ms, 0.00%)</title><rect x="239.4" y="85" width="0.1" height="15.0" fill="rgb(240,189,45)" rx="2" ry="2" />
+<text text-anchor="" x="242.36" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#strict_double_prefix_check (123000) (37 ms, 3.62%)</title><rect x="97.4" y="149" width="25.5" height="15.0" fill="rgb(224,211,23)" rx="2" ry="2" />
+<text text-anchor="" x="100.45" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >P..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Regexp#initialize (207) (1 ms, 0.10%)</title><rect x="509.2" y="85" width="0.7" height="15.0" fill="rgb(237,182,6)" rx="2" ry="2" />
+<text text-anchor="" x="512.20" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#analyze (500) (997 ms, 97.58%)</title><rect x="16.4" y="197" width="690.6" height="15.0" fill="rgb(208,40,50)" rx="2" ry="2" />
+<text text-anchor="" x="19.39" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::PhoneAnalyzer#analyze (500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_data (500) (0 ms, 0.00%)</title><rect x="705.3" y="165" width="0.2" height="15.0" fill="rgb(230,126,36)" rx="2" ry="2" />
+<text text-anchor="" x="708.33" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Kernel#require (1) (1 ms, 0.10%)</title><rect x="717.3" y="197" width="0.7" height="15.0" fill="rgb(250,209,36)" rx="2" ry="2" />
+<text text-anchor="" x="720.29" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;Module::Marshal&gt;#load (1) (8 ms, 0.78%)</title><rect x="708.6" y="133" width="5.6" height="15.0" fill="rgb(206,2,0)" rx="2" ry="2" />
+<text text-anchor="" x="711.56" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#each (500) (1 ms, 0.10%)</title><rect x="237.1" y="85" width="0.6" height="15.0" fill="rgb(234,187,16)" rx="2" ry="2" />
+<text text-anchor="" x="240.10" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#number_match? (5500) (16 ms, 1.57%)</title><rect x="225.5" y="69" width="11.3" height="15.0" fill="rgb(221,212,54)" rx="2" ry="2" />
+<text text-anchor="" x="228.47" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>MatchData#to_a (500) (0 ms, 0.00%)</title><rect x="210.2" y="117" width="0.2" height="15.0" fill="rgb(216,163,3)" rx="2" ry="2" />
+<text text-anchor="" x="213.18" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#types_for_check (500) (4 ms, 0.39%)</title><rect x="237.7" y="101" width="2.4" height="15.0" fill="rgb(221,14,12)" rx="2" ry="2" />
+<text text-anchor="" x="240.66" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>NilClass#to_s (1000) (0 ms, 0.00%)</title><rect x="427.8" y="117" width="0.2" height="15.0" fill="rgb(213,147,43)" rx="2" ry="2" />
+<text text-anchor="" x="430.77" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#vanity_conversion (500) (0 ms, 0.00%)</title><rect x="13.8" y="165" width="0.2" height="15.0" fill="rgb(221,65,51)" rx="2" ry="2" />
+<text text-anchor="" x="16.84" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#load_data (1) (9 ms, 0.88%)</title><rect x="708.0" y="149" width="6.2" height="15.0" fill="rgb(225,26,26)" rx="2" ry="2" />
+<text text-anchor="" x="711.00" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_regexp_cache (500) (0 ms, 0.00%)</title><rect x="13.5" y="165" width="0.1" height="15.0" fill="rgb(208,43,45)" rx="2" ry="2" />
+<text text-anchor="" x="16.54" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#country_prefix (500) (10 ms, 0.98%)</title><rect x="707.4" y="181" width="6.9" height="15.0" fill="rgb(229,199,21)" rx="2" ry="2" />
+<text text-anchor="" x="710.38" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#each (500) (37 ms, 3.62%)</title><rect x="211.1" y="101" width="25.7" height="15.0" fill="rgb(254,96,41)" rx="2" ry="2" />
+<text text-anchor="" x="214.07" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >A..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Regexp#match (5500) (4 ms, 0.39%)</title><rect x="233.8" y="37" width="3.0" height="15.0" fill="rgb(240,101,13)" rx="2" ry="2" />
+<text text-anchor="" x="236.77" y="47.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#upcase (500) (0 ms, 0.00%)</title><rect x="714.2" y="165" width="0.1" height="15.0" fill="rgb(252,167,13)" rx="2" ry="2" />
+<text text-anchor="" x="717.19" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#country_or_default_country (500) (2 ms, 0.20%)</title><rect x="705.9" y="181" width="1.1" height="15.0" fill="rgb(227,122,12)" rx="2" ry="2" />
+<text text-anchor="" x="708.88" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Hash#each (500) (992 ms, 97.09%)</title><rect x="17.7" y="165" width="687.6" height="15.0" fill="rgb(253,180,40)" rx="2" ry="2" />
+<text text-anchor="" x="20.69" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Hash#each (500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Fiber:70133444098420 (1,022 ms, 100.03%)</title><rect x="10.0" y="293" width="708.0" height="15.0" fill="rgb(231,213,7)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="303.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Fiber:70133444098420</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Hash#keys (500) (0 ms, 0.00%)</title><rect x="239.2" y="85" width="0.2" height="15.0" fill="rgb(227,172,34)" rx="2" ry="2" />
+<text text-anchor="" x="242.16" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#sanitize_fixed_mobile (500) (1 ms, 0.10%)</title><rect x="236.8" y="101" width="0.9" height="15.0" fill="rgb(227,10,23)" rx="2" ry="2" />
+<text text-anchor="" x="239.83" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#all_number_types (500) (43 ms, 4.21%)</title><rect x="210.4" y="117" width="29.7" height="15.0" fill="rgb(216,171,24)" rx="2" ry="2" />
+<text text-anchor="" x="213.43" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ph..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#parse_special (500) (0 ms, 0.00%)</title><rect x="557.3" y="85" width="0.1" height="15.0" fill="rgb(226,99,50)" rx="2" ry="2" />
+<text text-anchor="" x="560.30" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;Class::IO&gt;#binread (1) (1 ms, 0.10%)</title><rect x="708.0" y="133" width="0.6" height="15.0" fill="rgb(251,194,21)" rx="2" ry="2" />
+<text text-anchor="" x="711.01" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Phone#initialize (500) (1,016 ms, 99.44%)</title><rect x="10.9" y="213" width="704.0" height="15.0" fill="rgb(217,92,6)" rx="2" ry="2" />
+<text text-anchor="" x="13.89" y="223.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::Phone#initialize (500)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_regexp_cache (1000) (0 ms, 0.00%)</title><rect x="241.7" y="53" width="0.2" height="15.0" fill="rgb(214,216,43)" rx="2" ry="2" />
+<text text-anchor="" x="244.69" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#strict_check (500) (0 ms, 0.00%)</title><rect x="13.2" y="181" width="0.1" height="15.0" fill="rgb(205,224,5)" rx="2" ry="2" />
+<text text-anchor="" x="16.22" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Hash#select (500) (1 ms, 0.10%)</title><rect x="209.2" y="117" width="1.0" height="15.0" fill="rgb(222,43,23)" rx="2" ry="2" />
+<text text-anchor="" x="212.15" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#each (500) (3 ms, 0.29%)</title><rect x="240.5" y="85" width="2.4" height="15.0" fill="rgb(251,54,5)" rx="2" ry="2" />
+<text text-anchor="" x="243.51" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#original_starts_with_plus? (500) (1 ms, 0.10%)</title><rect x="706.3" y="165" width="0.7" height="15.0" fill="rgb(243,66,28)" rx="2" ry="2" />
+<text text-anchor="" x="709.30" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#type_regex (5000) (8 ms, 0.78%)</title><rect x="217.4" y="69" width="5.3" height="15.0" fill="rgb(224,22,5)" rx="2" ry="2" />
+<text text-anchor="" x="220.41" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Enumerable#find (500) (4 ms, 0.39%)</title><rect x="240.3" y="101" width="2.6" height="15.0" fill="rgb(236,15,7)" rx="2" ry="2" />
+<text text-anchor="" x="243.32" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Phone#sanitized (1000) (3 ms, 0.29%)</title><rect x="12.4" y="197" width="1.9" height="15.0" fill="rgb(206,212,4)" rx="2" ry="2" />
+<text text-anchor="" x="15.39" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (500) (0 ms, 0.00%)</title><rect x="13.3" y="181" width="0.3" height="15.0" fill="rgb(243,192,6)" rx="2" ry="2" />
+<text text-anchor="" x="16.33" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#match (1000) (1 ms, 0.10%)</title><rect x="241.9" y="69" width="1.0" height="15.0" fill="rgb(235,171,13)" rx="2" ry="2" />
+<text text-anchor="" x="244.91" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[global]#[no method] (1) (1,022 ms, 100.03%)</title><rect x="10.0" y="277" width="708.0" height="15.0" fill="rgb(218,38,34)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="287.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[global]#[no method] (1)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Phone#separate_extension (500) (3 ms, 0.29%)</title><rect x="14.3" y="197" width="2.1" height="15.0" fill="rgb(235,220,14)" rx="2" ry="2" />
+<text text-anchor="" x="17.31" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#double_prefix_allowed? (123000) (44 ms, 4.31%)</title><rect x="675.0" y="149" width="30.3" height="15.0" fill="rgb(227,56,50)" rx="2" ry="2" />
+<text text-anchor="" x="678.00" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ph..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#parse_single_country (123000) (797 ms, 78.01%)</title><rect x="122.9" y="149" width="552.1" height="15.0" fill="rgb(226,157,33)" rx="2" ry="2" />
+<text text-anchor="" x="125.87" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::PhoneAnalyzer#parse_single_country (123000)</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_regexp_cache (245500) (65 ms, 6.36%)</title><rect x="509.9" y="101" width="44.8" height="15.0" fill="rgb(243,47,22)" rx="2" ry="2" />
+<text text-anchor="" x="512.89" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phon..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (245500) (183 ms, 17.91%)</title><rect x="428.0" y="117" width="126.7" height="15.0" fill="rgb(211,32,13)" rx="2" ry="2" />
+<text text-anchor="" x="430.96" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Phonelib::Phone..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#- (500) (1 ms, 0.10%)</title><rect x="238.4" y="85" width="0.8" height="15.0" fill="rgb(250,173,39)" rx="2" ry="2" />
+<text text-anchor="" x="241.36" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (1,022 ms, 100%)</title><rect x="10.0" y="325" width="708.0" height="15.0" fill="rgb(249,99,29)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="335.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#join (500) (0 ms, 0.00%)</title><rect x="557.1" y="85" width="0.2" height="15.0" fill="rgb(236,118,12)" rx="2" ry="2" />
+<text text-anchor="" x="560.06" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#number_format (500) (4 ms, 0.39%)</title><rect x="240.1" y="117" width="2.8" height="15.0" fill="rgb(246,229,26)" rx="2" ry="2" />
+<text text-anchor="" x="243.11" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Array#join (5000) (2 ms, 0.20%)</title><rect x="220.1" y="53" width="1.6" height="15.0" fill="rgb(249,221,37)" rx="2" ry="2" />
+<text text-anchor="" x="223.12" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#extension_separate_symbols (1000) (0 ms, 0.00%)</title><rect x="15.6" y="181" width="0.2" height="15.0" fill="rgb(245,95,3)" rx="2" ry="2" />
+<text text-anchor="" x="18.56" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#type_regex (500) (1 ms, 0.10%)</title><rect x="556.7" y="101" width="0.7" height="15.0" fill="rgb(251,33,46)" rx="2" ry="2" />
+<text text-anchor="" x="559.66" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzer#parse_country (500) (1 ms, 0.10%)</title><rect x="705.5" y="181" width="0.4" height="15.0" fill="rgb(212,34,35)" rx="2" ry="2" />
+<text text-anchor="" x="708.45" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Regexp#match (1000) (1 ms, 0.10%)</title><rect x="242.1" y="53" width="0.8" height="15.0" fill="rgb(223,212,14)" rx="2" ry="2" />
+<text text-anchor="" x="245.11" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Hash#merge! (500) (1 ms, 0.10%)</title><rect x="208.8" y="117" width="0.4" height="15.0" fill="rgb(208,136,46)" rx="2" ry="2" />
+<text text-anchor="" x="211.78" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>String#gsub (500) (0 ms, 0.00%)</title><rect x="14.0" y="181" width="0.3" height="15.0" fill="rgb(254,142,22)" rx="2" ry="2" />
+<text text-anchor="" x="16.97" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::Core#phone_regexp_cache (5500) (2 ms, 0.20%)</title><rect x="231.7" y="37" width="1.1" height="15.0" fill="rgb(215,187,32)" rx="2" ry="2" />
+<text text-anchor="" x="234.69" y="47.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Phonelib::PhoneAnalyzerHelper#cr (500) (0 ms, 0.00%)</title><rect x="15.8" y="181" width="0.3" height="15.0" fill="rgb(217,56,24)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+</svg>
